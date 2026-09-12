@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { DemoLayerCache, DemoPortMap, DemoContainerVsVM, DemoOverlayFS, DemoReconcileLoop } from "@/components/container/demos";
+import { DemoLayerCache, DemoPortMap, DemoContainerVsVM, DemoOverlayFS, DemoReconcileLoop, DemoNamespace, DemoCgroups } from "@/components/container/demos";
 import { LayersStack3DDemo, PortFlow3DDemo } from "@/components/container/Demo3D";
 
 const TABS = [
@@ -11,6 +11,8 @@ const TABS = [
   { key: "vm", label: "⚖️ 容器 vs 虚拟机", tag: "2D", comp: <DemoContainerVsVM /> },
   { key: "cow", label: "🥞 写时复制", tag: "2D", comp: <DemoOverlayFS /> },
   { key: "reconcile", label: "🔁 调和循环", tag: "K8s", comp: <DemoReconcileLoop /> },
+  { key: "namespace", label: "🕶️ namespace", tag: "原理", comp: <DemoNamespace /> },
+  { key: "cgroups", label: "⚡ cgroups", tag: "原理", comp: <DemoCgroups /> },
   { key: "layers3d", label: "🧊 镜像分层", tag: "3D", comp: <LayersStack3DDemo /> },
   { key: "port3d", label: "🚢 端口包流", tag: "3D", comp: <PortFlow3DDemo /> },
 ];

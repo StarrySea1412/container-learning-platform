@@ -1710,4 +1710,403 @@ kubectl delete pod <名字>   # 删一个，看它秒级重生
       ],
     },
   },
+
+  /* ================= 原理篇 · 课程八：容器是怎么被造出来的 ================= */
+  {
+    id: "principles-container",
+    slug: "principles-container",
+    title: "容器是怎么被造出来的",
+    description: "namespace + cgroups 硬核拆解：不借助任何比喻的比喻——看完你能徒手在 Linux 上造一个容器。",
+    track: "principle",
+    difficulty: "advanced",
+    duration: "45 分钟",
+    icon: "🧬",
+    tags: ["namespace", "cgroups", "内核"],
+    chapters: [
+      {
+        id: "ch-ns",
+        slug: "namespace",
+        title: "隔离：给进程戴眼镜",
+        lessons: [
+          {
+            id: "l-namespace",
+            slug: "namespace",
+            title: "namespace：改变进程看到的全世界",
+            priority: "must-know",
+            minutes: 12,
+            demo: "namespace-view",
+            content: `Docker 篇我们说过：容器就是一个「被隔离的普通进程」。现在拆开「隔离」这个词——它全部由内核的 **namespace（命名空间）**机制实现。
+
+先建立一个反直觉的认知：**namespace 什么都不创造、什么都不隐藏**。它只是给进程戴上一副 VR 眼镜——进程以为自己在独立的世界里，其实内核里大家都在同一台机器上。
+
+Linux 一共有八种 namespace，容器的世界观由其中六种撑起：
+
+| namespace | 管什么 | 隔离后 |
+|---|---|---|
+| **PID** | 进程编号 | 容器里的进程以为自己从 1 号开始 |
+| **MNT** | 挂载点 | 容器有自己的根目录 / |
+| **NET** | 网络 | 自己的网卡、IP、端口空间 |
+| **UTS** | 主机名 | 自己的 hostname |
+| **IPC** | 进程间通信 | 自己的消息队列/共享内存 |
+| **USER** | 用户映射 | 容器里的 root 在宿主机只是个普通人 |
+
+到上面的动画里逐个开关，亲眼看「世界」如何随视野改变。
+
+**最重要的习惯**：以后看到 Docker 的任何行为，先问一句「这背后是哪个 namespace 的把戏」。比如容器里 nginx 绑 80 不和宿主机冲突（NET 隔离）、容器里 root 不能读宿主机的 /etc/shadow（USER/MNT 隔离）——全是同一副眼镜的不同镜片。`,
+            advanced: [
+              {
+                title: "面试追问：八种 namespace 还有哪两种",
+                body: `**Cgroup ns**（隐藏容器的 cgroup 路径，防止信息泄露）和 **Time ns**（Linux 5.6+，给进程一个自己的系统时钟——为「快照恢复后时间倒流」这类检查点场景设计）。加起来八种。
+
+冷知识：namespace 是 2002 年随 mount namespace 进入内核的，比 Docker 早了 11 年。Solaris Zones、FreeBSD Jails 是同期异曲同工的实现——「轻量隔离」从来都是系统界的老梦想。`,
+                links: [
+                  { label: "namespaces(7) 手册（最权威）", url: "https://man7.org/linux/man-pages/man7/namespaces.7.html" },
+                ],
+              },
+            ],
+          },
+          {
+            id: "l-pid1",
+            slug: "pid-1",
+            title: "PID 1 的诅咒：僵尸进程与 tini",
+            priority: "important",
+            minutes: 8,
+            content: `PID namespace 有个鲜为人知的副作用，坑过几乎每个容器用户：**容器里编号为 1 的进程，职责变了。**
+
+在正常 Linux 里，1 号是 systemd/init，它有一项天职：**收养并收割孤儿进程**（子进程死后变成僵尸，必须被 1 号 wait 掉）。
+
+但在容器里，你的应用被直接推上 1 号位：
+
+\`\`\`bash
+docker run node:20 npm start
+\`\`\`
+
+现在 npm 是容器的 1 号。它不会收养孤儿——如果它的子进程变成僵尸，就**永远尸位素餐**，慢慢吃光 PID 空间。更糟的是：**1 号默认忽略所有信号**（防止被误杀），所以你 \`docker stop\` 发的 SIGTERM，npm 可能根本不转发给 node 子进程，等 10 秒超时后被 SIGKILL 硬切——这就是「为什么我的容器总是 10 秒才停、数据库总是来不及落盘」的经典答案。
+
+**修法一行**：把一个正经的 init 放上 1 号位，让它替你管孩子、传信号：
+
+\`\`\`bash
+docker run --init node:20 npm start      # --init 注入 tini
+# 或 Dockerfile 里 ENTRYPOINT ["tini", "npm", "start"]
+\`\`\`
+
+记住这对组合拳：**PID 1 的失职 = 僵尸堆积 + 优雅停机失效；tini/--init 是标准解。**`,
+            advanced: [
+              {
+                title: "生产案例：k8s 里的 shareProcessNamespace",
+                body: `K8s Pod 里多个容器共享 PID namespace 吗？默认**不共享**——每个容器有自己的 1 号。Sidecar 想清理主容器僵尸？做不到。Pod 级参数 shareProcessNamespace: true 可以打开共享（老版本 sidecar 靠它互相管理进程），代价是 PID 隔离消失、互相可见。K8s 1.28+ 的原生 sidecar（initContainers + restartPolicy: Always）本质上也是让 kubelet 更聪明地管理 1 号生命周期。面试答「PID 1 问题」时能带上这两层，就是加分项。`,
+                links: [
+                  { label: "tini：一个小而美的 init", url: "https://github.com/krallin/tini" },
+                ],
+              },
+            ],
+          },
+          {
+            id: "l-handmade",
+            slug: "handmade",
+            title: "徒手造一个容器：不装 Docker 行不行",
+            priority: "must-know",
+            minutes: 12,
+            content: `检验原理是否真的懂了，就看你敢不敢徒手造。下面每条命令都在你的 **WSL2 Ubuntu** 里直接跑（不需要 Docker）：
+
+\`\`\`bash
+# 1. 用 namespace 隔离启动一个 bash：
+#    -m 挂载空间  -u 用户空间  -i IPC  -n 网络  -p PID  -U Cgroup 空间
+sudo unshare -m -u -i -n -p -f --mount-proc bash
+
+# 2. 此刻你已经「在容器里」了，验证一下：
+ps aux        # 只有自己，而且是 1 号（PID 隔离 ✓）
+hostname      # 和宿主机一样（UTS 还没改，手动改一个）
+hostname handmade-container
+
+# 3. 隔离文件系统：拿一个最小 rootfs（busybox 只有 4MB）
+mkdir -p /tmp/rootfs && cd /tmp/rootfs
+wget https://busybox.net/downloads/binaries/1.31.0-defconfig-multiarch-musl/busybox-x86_64 -O busybox
+chmod +x busybox && ./busybox --list | while read f; do ./busybox --install -s .; done
+
+# 4. 把根切过去（MNT 隔离的精髓：pivot_root/chroot）
+chroot /tmp/rootfs sh
+
+# 5. 你现在在一个「容器」里：ls 看到的整个世界就是那个 4MB 目录
+\`\`\`
+
+恭喜——**namespace（第 1 步）+ 独立 rootfs（第 3-4 步）= 一个手工容器**。Liz Rice 在 DockerCon 上用 100 行 Go 代码做过同样的事（self-contained demo 见下方链接）。
+
+离「生产级」还差的就是下一步的 cgroups——不给它限流，它随时可能吃光整机资源。`,
+            advanced: [
+              {
+                title: "那张缺的拼图：为什么还需要 copy-on-write",
+                body: `手工容器用「复制 busybox」凑合了 rootfs，但真实镜像不能每个容器都完整复制 200MB——这就是 Docker 篇 overlayfs 存在的意义：多层只读共享 + 一个薄可写层。下一门课专门拆它。
+
+另外本课的 unshare 是「一次性玩具」：真正的容器运行时（runc）还要设置 cgroups、绑网卡（veth）、capabilities 裁剪、seccomp 系统调用白名单——每一条都是安全边界。永远不要拿手工容器跑生产。`,
+                links: [
+                  { label: "Liz Rice《Containers from scratch》代码", url: "https://github.com/lizrice/containers-from-scratch" },
+                  { label: "unshare(1) 手册", url: "https://man7.org/linux/man-pages/man1/unshare.1.html" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: "ch-cg",
+        slug: "cgroups",
+        title: "限流：给进程装电表",
+        lessons: [
+          {
+            id: "l-cgroups",
+            slug: "cgroups",
+            title: "cgroups：资源的水表电表",
+            priority: "must-know",
+            minutes: 10,
+            demo: "cgroups-meter",
+            content: `namespace 解决了「看不见」，但没解决「用得多」。一个容器里的进程若想吃光 64 核 CPU 和全部内存，隔离形同虚设——于是有了第二根支柱 **cgroups（control groups，控制组）**。
+
+它就是内核给进程装的**水电表 + 闸门**：
+
+- **CPU**：给这组进程最多 1.5 核（超出就排队，不是杀死）；
+- **内存**：上限 256MB，超了内核直接 OOM 杀进程（Docker 篇的 exit 137 的真身）；
+- **IO**：磁盘读写限速；
+- **PID 数**：最多 100 个进程（防僵尸炸弹）。
+
+到上面的动画里拉一拉三个滑杆，亲手感受两种「超限」的命运差别：**CPU 超限 = 被限流变慢；内存超限 = 被 OOM 直接击毙。**这个区别决定了你以后怎么给应用配资源。
+
+内核的实现是树形目录（cgroups v2 统一挂载在 /sys/fs/cgroup）：往目录里写 limit，再把进程 PID 写进 cgroup.procs，闸门即生效。Docker 的 \`--cpus\` \`-m\` 参数，翻译过来就是帮你写这两个文件而已。`,
+            advanced: [
+              {
+                title: "面试追问：--cpus=1.5 内核是怎么实现的",
+                body: `不是给容器单独分配核，而是 **CFS 带宽控制**：把时间切成 100ms 的窗口（cfs_period），规定每窗口最多用 150ms（cfs_quota=150000）。用完这 150ms，本窗口剩余时间容器里所有线程强制暂停（被 throttle），下窗口再来。副作用：多线程应用在 quota 边缘会出现毫秒级「集体卡顿」——这就是著名的「容器化后 P99 延迟毛刺」问题的根因之一，调大 period 或改用 cpuset 绑核可缓解。`,
+                links: [
+                  { label: "cgroups v2 内核文档", url: "https://www.kernel.org/doc/html/latest/admin-guide/cgroup-v2.html" },
+                ],
+              },
+            ],
+          },
+          {
+            id: "l-combine",
+            slug: "combine",
+            title: "合体：一个进程如何变成容器",
+            priority: "important",
+            minutes: 8,
+            content: `把两根支柱合起来，看 Docker 引擎在你按下回车后的 3 秒里做了什么：
+
+\`\`\`bash
+docker run -m 256m --cpus=1.5 nginx:alpine
+\`\`\`
+
+1. 拉镜像、用 overlayfs 拼出 rootfs（下一门课的主角）；
+2. **clone() 一个新进程，一次性戴上 6 副 namespace 眼镜**（PID/MNT/NET/UTS/IPC/USER）；
+3. 创建一个 cgroup 目录，写入 -m/--cpus 限额，把新进程塞进去；
+4. 在新根里 pivot_root，执行 nginx——它从出生那一刻就以为自己在独立小世界里；
+5. 顺手配好虚拟网卡 veth 对（容器一端、宿主机一端插进 docker0 网桥）、裁剪掉危险 capabilities、挂上 seccomp 系统调用白名单。
+
+所以「容器」的完整定义现在可以写了：
+
+> **容器 = 一组被 namespace 改变视野、被 cgroups 限制用量、以 overlayfs 为根的普通 Linux 进程。**
+
+没有任何魔法，没有虚拟机，没有第二个内核。Docker 引擎的全部价值，是把这五步的脏活累活打包成一行命令——而你现在已经知道每一行背后发生了什么。
+
+（第三块拼图 overlayfs 和行业标准 OCI，见下一门课。）`,
+            advanced: [
+              {
+                title: "安全边界：namespace 隔离不是虚拟机隔离",
+                body: `共享内核 = 安全面共享。内核漏洞（如 Dirty COW、狂暴模式 spoofing 类）一旦被利用，容器可能逃逸到宿主机——这就是为什么：①宿主机内核要及时打补丁；②不可信工作负载用轻量 VM 隔离（Kata Containers、gVisor 沙箱，前者真开小虚拟机，后者用用户态内核拦截系统调用）；③默认的 seccomp/capabilities 裁剪不要随手 --privileged 关掉——那个参数等于摘掉所有护栏，生产环境见到就该报警。`,
+                links: [
+                  { label: "K8s 官方：工作负载隔离（沙箱）", url: "https://kubernetes.io/zh-cn/docs/concepts/security/" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    summary: {
+      keyPoints: [
+        "namespace 改变视野不创造隔离：六镜片 = PID/MNT/NET/UTS/IPC/USER",
+        "PID 1 失职 = 僵尸堆积 + 优雅停机失效，--init/tini 是标准解",
+        "cgroups：CPU 超限被限流变慢，内存超限被 OOM 击毙（exit 137）",
+        "容器 = namespace 视野 + cgroups 用量 + overlayfs 根的普通进程",
+      ],
+    },
+  },
+
+  /* ================= 原理篇 · 课程九：镜像与文件系统 ================= */
+  {
+    id: "principles-image",
+    slug: "principles-image",
+    title: "镜像与文件系统",
+    description: "overlayfs 分层、docker pull 的背后、OCI 标准——以及按下 docker run 之后发生的全部 12 件事。",
+    track: "principle",
+    difficulty: "advanced",
+    duration: "40 分钟",
+    icon: "🥞",
+    tags: ["overlayfs", "OCI", "镜像"],
+    chapters: [
+      {
+        id: "ch-overlay",
+        slug: "overlay",
+        title: "叠起来的文件系统",
+        lessons: [
+          {
+            id: "l-overlay",
+            slug: "overlayfs",
+            title: "overlayfs：五层三目录一台戏",
+            priority: "must-know",
+            minutes: 10,
+            demo: "overlayfs",
+            content: `手工容器那课我们复制了一整个 busybox 当根——每个容器都这么干，磁盘和拉取时间都不可接受。Docker 篇说过镜像能「分层共享」，现在拆它的实现：内核的 **overlayfs** 文件系统。
+
+一台戏三个目录：
+
+- **lowerdir（多层只读层）**：镜像的每一层，全集群只存一份、共享挂载；
+- **upperdir（一层可写层）**：每个容器自己的草稿纸；
+- **merged（合成视图）**：容器里看到的 /，三层叠加出来的幻觉。
+
+三条核心规则：
+
+1. **读**：从上往下找，第一层命中即返回——上层文件会「盖住」下层的；
+2. **写**：从不碰只读层——把目标文件**整个复制到 upperdir 再改**，这就是写时复制（Copy-on-Write）；
+3. **删**：也不碰下层——在 upperdir 放一个「白名单标记」（whiteout），merged 视图里它就消失了。
+
+到上面的动画里改一次 /etc/config，看 CoW 怎么工作。
+
+**一个必踩的坑提前排**：在容器里频繁写大文件（数据库、日志），每次写都要先把整文件复制到 upperdir——首写延迟巨大。所以生产数据库要么挂 volume（绕过 overlayfs），要么放集群外。你在 Docker 篇学的卷，原理上就是这条规则逼出来的。`,
+            advanced: [
+              {
+                title: "高手视角：看穿容器文件的真实身份",
+                body: `在运行中的容器里 \`cat /proc/mounts | grep overlay\`，能看到完整的 lowerdir/upperdir/merge 挂载参数——宿主机上对应目录就在 /var/lib/docker/overlay2/ 下。另一个实用技巧：想知道「这个文件到底来自哪一层」，宿主机上 \`docker image inspect\` 逐层看 history，或者用 dive（还记得竞品调研里那 5.4 万星的工具吗）直接可视化每层文件清单——原理你已经在本站分层塔里玩过了。`,
+                links: [
+                  { label: "内核文档：overlayfs", url: "https://www.kernel.org/doc/html/latest/filesystems/overlayfs.html" },
+                ],
+              },
+            ],
+          },
+          {
+            id: "l-pull",
+            slug: "docker-pull",
+            title: "docker pull 的背后：清单与分层下载",
+            priority: "important",
+            minutes: 10,
+            content: `你早就见过这个输出，现在能看懂每个字了：
+
+\`\`\`
+nginx:alpine: Pull from library/nginx
+00cce0fe: Pull complete (12.9MB)   ← 一层
+3013d787: Pull complete (3.2MB)    ← 又一层
+0403aeb9: Pull complete (2.6MB)
+Digest: sha256:6f39abb1...
+\`\`\`
+
+背后的协议是这样跑的：
+
+1. **拿清单（manifest）**：先问 registry（Docker Hub）：「nginx:alpine 的配置是什么？」拿到一份 JSON 清单——里面列出这个镜像由**哪几层组成、每层的 sha256 指纹、多大**，外加一份配置（启动命令、环境变量、暴露端口）。
+2. **按层校验下载**：逐层下载压缩包（tar.gz），下载完算一遍 sha256，和清单对指纹——**对不上就整个拒绝**。这就是为什么供应链投毒很难篡改已发布镜像。
+3. **解压落盘**：每层解压成 overlay2 目录里的一个只读层。
+4. **共享去重**：如果本机已有相同指纹的层（比如你之前拉过 nginx:latest，共享同一个基础层），**直接跳过**——所以你看到大量「Already exists」。
+
+现在回头理解三个日常现象就秒懂了：为什么不同镜像能共享基础层（指纹相同）、为什么 digest 比 tag 可靠（tag 是可变指针，digest 是内容指纹）、为什么 \`docker system df\` 里「共享层」能省好几个 GB。`,
+            advanced: [
+              {
+                title: "供应链安全：从 digest 到签名",
+                body: `生产拉镜像永远用 digest（\`nginx@sha256:...\`）而不是 tag——tag 可以被重新指向恶意镜像，digest 是内容寻址改不了。进阶防线是**镜像签名与验签**：Docker Content Trust / Notary v2 / cosign（Sigstore），在 CI 里校验「这个镜像确实是我们构建的」。再进阶是 SBOM（软件物料清单，syft 生成）——知道你的镜像里到底装了什么版本的什么库，Log4Shell 那种事来了第一个知道自己在不在射程。`,
+                links: [
+                  { label: "OCI 镜像规范（manifest 格式）", url: "https://github.com/opencontainers/image-spec/blob/main/manifest.md" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        id: "ch-oci",
+        slug: "oci",
+        title: "标准与全景",
+        lessons: [
+          {
+            id: "l-oci",
+            slug: "oci",
+            title: "OCI：把 Docker 变成行业共识",
+            priority: "must-know",
+            minutes: 10,
+            content: `2013 年 Docker 火了之后有个隐忧：**镜像格式和运行时接口都是 Docker 一家的私货**。全行业的基础设施绑死在单一公司上，谁都不安心。
+
+2015 年，Docker 牵头把两样东西捐给了 Linux 基金会下的开放容器组织 **OCI（Open Container Initiative）**：
+
+1. **镜像规范（image-spec）**：分层怎么打 tar、manifest 长什么样、config 有哪些字段——从此**任何工具构建的镜像，任何运行时都能跑**；
+2. **运行时规范（runtime-spec）**：「一个容器」的接口定义——一个 rootfs + 一份进程/namespace/cgroups 配置，实现它的最低标准。参考实现叫 **runc**，就是 Docker 每天在用的那把螺丝刀。
+
+于是完整的分工图出现了：
+
+> **Docker/containerd（工具链）→ 调用 runc（OCI 运行时）→ 调用内核 clone/cgroups/overlayfs（Linux 机制）**
+
+这条链解释了很多现象：为什么 podman 能直接跑 Docker 的镜像（都遵守 image-spec）；为什么 Kubernetes 弃用 Docker 运行时你的容器照样跑（K8s 通过 containerd/CRI-O 调 runc，Docker 引擎那一层被跳过，镜像标准没变）；为什么你能在本站沙盒里模拟 Docker（模拟的是行为，原理你已经全部拆过了）。`,
+            advanced: [
+              {
+                title: "名词表：一图分清 Docker / containerd / runc / CRI",
+                body: `- **runc**：OCI 运行时的参考实现，只做一件事：按规范起一个容器进程；
+- **containerd**：Docker 捐给 CNCF 的高层运行时，管镜像、快照、生命周期，K8s 通过 CRI 直接对接它；
+- **CRI**：K8s 的运行时接口标准，containerd/CRI-O 都实现它；
+- **Docker Engine**：开发者的全家桶 CLI+守护进程，底层也调 containerd。
+
+2022 年 K8s 1.24 弃用 dockershim 一度引发恐慌，实际上只是换了个直连 containerd 的插头——OCI 标准保证了镜像生态无缝。这就是「标准的价值」：换 implementations，不换生态。`,
+                links: [
+                  { label: "Open Container Initiative 官网", url: "https://opencontainers.org/" },
+                  { label: "K8s 博客：别慌，Docker 和 Kubernetes 还是好朋友", url: "https://kubernetes.io/zh-cn/blog/2020/12/02/dont-panic-kubernetes-and-docker/" },
+                ],
+              },
+            ],
+          },
+          {
+            id: "l-journey",
+            slug: "full-journey",
+            title: "全景课：docker run 按下之后的 12 件事",
+            priority: "must-know",
+            minutes: 12,
+            content: `毕业课。把整个原理篇装进一个时间线——你按下 \`docker run -m 256m --cpus=1.5 -p 8080:80 nginx:alpine\` 之后：
+
+**发现（0-1）**
+1. CLI 解析参数，发给 Docker 守护进程（gRPC → containerd）；
+2. 本地找镜像 nginx:alpine → 没有就走上一课的 pull 流程（manifest → 校验 → 解层）。
+
+**组装（2-6）**
+3. overlayfs 把各只读层 + 新建的可写层，合成一个 rootfs 目录；
+4. 生成容器配置包（bundle）：进程启动命令、6 种 namespace 参数、cgroups 限额、挂载表；
+5. 调 **runc**，按 OCI 规范接管；
+6. runc 调内核 **clone()**，一次性挂上全部 namespace——新进程诞生，它看到的世界从 1 号进程开始。
+
+**限流与联网（7-9）**
+7. 把新进程写进 cgroup：CPU 150ms/100ms、内存 256MB 的电表开始走字；
+8. pivot_root 切进 rootfs，nginx 启动（它对这一切毫不知情）；
+9. 内核造一对 veth 虚拟网线：一头在容器命名空间（eth0），一头插进宿主机 docker0 网桥；iptables 写好 DNAT：宿主机 8080 → 容器 80。
+
+**看护（10-12）**
+10. 容器进程成为（tini/或应用担任的）1 号，开始收养孤儿、转发信号；
+11. 你 curl localhost:8080 → DNAT → 容器内 80 → nginx 应答，access log 里留下 172.17.0.1；
+12. 守护进程持续盯着：进程退出就记录状态（正是调和循环在 K8s 里接管之前，单机版的看护）。
+
+十二件事，每一件都对应你学过的一课：镜像与 pull（本课）、overlayfs（本课）、namespace 与 PID 1（容器制造课）、cgroups 与 137（容器制造课）、veth 与 DNAT（Docker 网络课）、调和循环（K8s 进阶篇）。
+
+**从一行命令到内核机制，你已经没有盲区了。**这个站点教不了你的只剩一件事：在生产环境里积累手感——去毕业设计里把镜像部署到 kind 集群吧。`,
+            advanced: [
+              {
+                title: "继续深造的地图",
+                body: `原理篇到这里收束。想继续往深处走的三条路：①**内核侧**：读《Linux 内核设计与实现》+ 撸 runc 源码（1 万行左右，可读性极好）；②**安全侧**：seccomp/Capabilities/AppArmor 裁剪艺术，Falco 运行时检测；③**编排侧**：K8s 源码的 controller-runtime 框架，自己写一个 Operator。本站资源导航页里有每条路的精选入口。`,
+                links: [
+                  { label: "runc 源码仓库", url: "https://github.com/opencontainers/runc" },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    ],
+    summary: {
+      keyPoints: [
+        "overlayfs 三目录：lower 只读共享 / upper 每容器草稿纸 / merged 叠加视图",
+        "写 = 复制到可写层再改；删 = 放 whiteout 标记——镜像层永远不可变",
+        "docker pull = manifest 清单 → 逐层 sha256 校验 → 解层 → 指纹去重",
+        "OCI 让镜像与运行时解耦；Docker 只是这条标准链上的著名实现",
+      ],
+    },
+  },
 ];

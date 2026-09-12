@@ -52,7 +52,7 @@ export default function HomePage() {
               <div><span className="text-2xl font-bold text-slate-800">{courses.length}</span> 门课</div>
               <div><span className="text-2xl font-bold text-slate-800">{lessonCount}</span> 节课</div>
               <div><span className="text-2xl font-bold text-slate-800">{challenges.length}</span> 个事故挑战</div>
-              <div><span className="text-2xl font-bold text-slate-800">7</span> 组交互动画</div>
+              <div><span className="text-2xl font-bold text-slate-800">9</span> 组交互动画</div>
               <div><span className="text-2xl font-bold text-slate-800">60+</span> 条模拟命令</div>
             </div>
           </div>

@@ -368,6 +368,159 @@ export function DemoReconcileLoop() {
   );
 }
 
+/* ---------- namespace：进程的视野切换器 ---------- */
+const NS_ITEMS = [
+  { key: "pid", label: "PID 进程号", syscall: "clone(CLONE_NEWPID)", view: "进程编号重新从 1 数起" },
+  { key: "mnt", label: "MNT 挂载", syscall: "pivot_root", view: "根目录 / 换成自己的" },
+  { key: "net", label: "NET 网络", syscall: "clone(CLONE_NEWNET)", view: "自己的网卡、自己的 IP" },
+  { key: "uts", label: "UTS 主机名", syscall: "clone(CLONE_NEWUTS)", view: "自己的 hostname" },
+  { key: "ipc", label: "IPC 通信", syscall: "clone(CLONE_NEWIPC)", view: "自己的进程间通信通道" },
+  { key: "user", label: "USER 用户", syscall: "clone(CLONE_NEWUSER)", view: "容器内可以是 root，宿主机不是" },
+] as const;
+type NsKey = (typeof NS_ITEMS)[number]["key"];
+
+export function DemoNamespace() {
+  const [ns, setNs] = useState<Partial<Record<NsKey, boolean>>>({});
+  const on = (k: NsKey) => !!ns[k];
+  const toggle = (k: NsKey) => setNs((p) => ({ ...p, [k]: !p[k] }));
+  const allOn = NS_ITEMS.every((i) => on(i.key));
+  const isolated = NS_ITEMS.filter((i) => on(i.key)).length;
+
+  return (
+    <div className="card p-4 my-4">
+      <div className="flex items-center justify-between flex-wrap gap-2 mb-3">
+        <div className="text-sm font-semibold text-slate-700">🕶️ 交互：namespace = 给进程戴 VR 眼镜</div>
+        <button
+          onClick={() => setNs(allOn ? {} : Object.fromEntries(NS_ITEMS.map((i) => [i.key, true])))}
+          className="text-xs px-3 py-1.5 rounded-lg bg-emerald-500 text-white hover:bg-emerald-600"
+        >
+          {allOn ? "↩ 关掉所有隔离" : "▶ 六个全开 = 一个容器"}
+        </button>
+      </div>
+      <div className="grid md:grid-cols-[1fr_1.2fr] gap-3">
+        {/* 左：开关面板 */}
+        <div className="space-y-1.5">
+          {NS_ITEMS.map((item) => (
+            <button
+              key={item.key}
+              onClick={() => toggle(item.key)}
+              className={`w-full text-left px-3 py-2 rounded-lg border text-xs transition-colors cursor-pointer ${
+                on(item.key) ? "border-emerald-300 bg-emerald-50" : "border-slate-200 bg-slate-50 hover:bg-slate-100"
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <span className={`w-7 text-center px-1 py-0.5 rounded text-[10px] font-semibold ${on(item.key) ? "bg-emerald-500 text-white" : "bg-slate-300 text-slate-600"}`}>
+                  {on(item.key) ? "ON" : "OFF"}
+                </span>
+                <span className="font-semibold text-slate-700">{item.label}</span>
+                <span className="ml-auto font-mono text-[10px] text-slate-400">{item.syscall}</span>
+              </div>
+              <div className={`mt-0.5 text-[11px] ${on(item.key) ? "text-emerald-600" : "text-slate-400"}`}>{item.view}</div>
+            </button>
+          ))}
+        </div>
+        {/* 右：进程看到的世界 */}
+        <div className="rounded-xl bg-slate-950/95 border border-slate-800 p-3 font-mono text-[11.5px] leading-relaxed text-slate-300 overflow-x-auto">
+          <div className="text-slate-500"># 进程 PID 789（sleep 300）看到的世界：</div>
+          <div className="mt-1.5"><span className="text-emerald-400">$ </span>ps aux</div>
+          {on("pid") ? (
+            <div className="text-slate-200">root&nbsp;&nbsp;1&nbsp;&nbsp;0.0&nbsp;&nbsp;sleep 300<br /><span className="text-slate-500"># 全世界只有自己，它还是 1 号</span></div>
+          ) : (
+            <div className="text-slate-200">1 systemd&nbsp;&nbsp; 42 sshd&nbsp;&nbsp; <span className="text-amber-300">789 sleep 300</span>&nbsp;&nbsp; 4022 nginx<br /><span className="text-slate-500"># 能看到宿主机全家</span></div>
+          )}
+          <div className="mt-1.5"><span className="text-emerald-400">$ </span>hostname</div>
+          <div className="text-slate-200">{on("uts") ? "container-3f9a" : "my-dev-pc"}</div>
+          <div className="mt-1.5"><span className="text-emerald-400">$ </span>ip -4 addr</div>
+          <div className="text-slate-200">{on("net") ? "lo: 127.0.0.1/8\neth0: 172.17.0.2/16（自己的小世界）".split("\n").map((s, i) => <div key={i}>{s}</div>) : "eth0: 192.168.1.66（宿主机的网卡）"}</div>
+          <div className="mt-1.5"><span className="text-emerald-400">$ </span>ls /</div>
+          <div className="text-slate-200">{on("mnt") ? "app  bin  etc  usr（自己的根文件系统）" : "home  etc  usr  opt  data（宿主机的盘子）"}</div>
+          <AnimatePresence>
+            {allOn && (
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="mt-2 rounded-lg bg-emerald-500/15 border border-emerald-400/40 px-2.5 py-1.5 text-emerald-300 text-[11px]">
+                ✓ 六个空间全隔离——这就是一个容器的雏形。内核还是同一个，改变的只是「它看见什么」。
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+      <div className="text-xs text-slate-500 mt-2">
+        已开 {isolated}/6。namespace 不创造任何东西，它只<strong className="text-slate-700">改变进程的视野</strong>——隔离是「看不见」，不是「不存在」。
+      </div>
+    </div>
+  );
+}
+
+/* ---------- cgroups：电表与闸门 ---------- */
+export function DemoCgroups() {
+  const [cpu, setCpu] = useState(1); // 限额：核
+  const [mem, setMem] = useState(256); // 限额：MB
+  const [load, setLoad] = useState(45); // 模拟业务流量 0-100
+  const cpuNeed = (load / 100) * 2; // 业务最高想吃 2 核
+  const cpuUse = Math.min(cpuNeed, cpu);
+  const throttled = cpuNeed > cpu + 0.001;
+  const memUse = Math.round((load / 100) * 300);
+  const oomed = memUse > mem;
+
+  return (
+    <div className="card p-4 my-4">
+      <div className="text-sm font-semibold text-slate-700 mb-3">⚡ 交互：cgroups = 给容器装电表（资源限额）</div>
+      <div className="grid md:grid-cols-[1fr_1fr] gap-3">
+        <div className="space-y-2.5">
+          <div>
+            <div className="flex justify-between text-xs text-slate-500 mb-1"><span>CPU 限额（--cpus）</span><span className="font-mono text-sky-600">{cpu.toFixed(1)} 核</span></div>
+            <input type="range" min={0.2} max={2} step={0.1} value={cpu} onChange={(e) => setCpu(Number(e.target.value))} className="w-full accent-sky-500" />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-slate-500 mb-1"><span>内存限额（-m）</span><span className="font-mono text-sky-600">{mem} MB</span></div>
+            <input type="range" min={64} max={512} step={32} value={mem} onChange={(e) => setMem(Number(e.target.value))} className="w-full accent-sky-500" />
+          </div>
+          <div>
+            <div className="flex justify-between text-xs text-slate-500 mb-1"><span>业务流量（模拟负载）</span><span className="font-mono text-amber-600">{load}%</span></div>
+            <input type="range" min={0} max={100} step={5} value={load} onChange={(e) => setLoad(Number(e.target.value))} className="w-full accent-amber-500" />
+          </div>
+          <div className="rounded-lg bg-slate-50 border border-slate-200 px-2.5 py-1.5 font-mono text-[11px] text-slate-600 truncate">
+            $ docker run --cpus={cpu.toFixed(1)} -m {mem}m my-app
+          </div>
+        </div>
+        <div className="space-y-2.5">
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-slate-500">CPU 用量 / 限额</span>
+              <span className={`font-mono ${throttled ? "text-amber-600 font-semibold" : "text-emerald-600"}`}>{cpuUse.toFixed(2)} / {cpu.toFixed(1)} 核{throttled ? " · 被限流" : ""}</span>
+            </div>
+            <div className="h-3.5 rounded-full bg-slate-100 border border-slate-200 overflow-hidden">
+              <motion.div animate={{ width: `${Math.min(100, (cpuUse / 2) * 100)}%` }} className={`h-full ${throttled ? "bg-amber-400" : "bg-emerald-400"}`} />
+            </div>
+            {throttled && <div className="text-[11px] text-amber-600 mt-0.5">业务想吃 {cpuNeed.toFixed(2)} 核，但闸门只有 {cpu.toFixed(1)} 核——不报错，只是变慢（throttle）</div>}
+          </div>
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-slate-500">内存用量 / 限额</span>
+              <span className={`font-mono ${oomed ? "text-rose-500 font-semibold" : "text-emerald-600"}`}>{memUse} / {mem} MB{oomed ? " · 超限！" : ""}</span>
+            </div>
+            <div className="h-3.5 rounded-full bg-slate-100 border border-slate-200 overflow-hidden">
+              <motion.div animate={{ width: `${Math.min(100, (memUse / 512) * 100)}%` }} className={`h-full ${oomed ? "bg-rose-400" : "bg-sky-400"}`} />
+            </div>
+          </div>
+          <AnimatePresence>
+            {oomed ? (
+              <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="text-xs font-mono text-rose-500 bg-rose-50 border border-rose-200 rounded-lg px-3 py-2">
+                容器被内核 OOM 杀掉：<strong>exit 137 (OOMKilled)</strong>
+                <span className="font-sans text-slate-500"> —— 和 Docker 篇那个 137 是同一把刀：超内存限制，内核直接开杀，控制器都救不了「吃太多」。</span>
+              </motion.div>
+            ) : (
+              <div className="text-xs text-slate-500">内存也没到线。试试把流量拉满、再把两个限额拧小——感受 CPU「排队变慢」和内存「直接被杀」的区别。</div>
+            )}
+          </AnimatePresence>
+        </div>
+      </div>
+      <div className="text-xs text-slate-500 mt-3">
+        namespace 管「<strong className="text-slate-700">看不见</strong>」，cgroups 管「<strong className="text-slate-700">用不多</strong>」。两样凑齐，一个普通进程才变成受约束的容器。
+      </div>
+    </div>
+  );
+}
+
 /* ---------- 注册表 ---------- */
 import { LayersStack3DDemo, PortFlow3DDemo } from "./Demo3D";
 
@@ -377,6 +530,8 @@ export function DemoRenderer({ name }: { name: string }) {
     case "port-map": return <DemoPortMap />;
     case "container-vm": return <DemoContainerVsVM />;
     case "overlayfs": return <DemoOverlayFS />;
+    case "namespace-view": return <DemoNamespace />;
+    case "cgroups-meter": return <DemoCgroups />;
     case "reconcile-loop": return <DemoReconcileLoop />;
     case "layers-3d": return <LayersStack3DDemo />;
     case "port-3d": return <PortFlow3DDemo />;
