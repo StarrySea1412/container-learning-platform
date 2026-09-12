@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion, useIsPresent } from "framer-motion";
 
 /* ---------- 分层与缓存 ---------- */
 const BASE_LAYERS = [
@@ -216,6 +216,10 @@ const k8sName = () => `pod-web-${Math.random().toString(36).slice(2, 7)}`;
 const SEED_NAMES = ["pod-web-a1b2c", "pod-web-d4e5f", "pod-web-x7y8z"];
 
 export function DemoReconcileLoop() {
+  // 关键：退出动画期间必须停止高频 setState，否则 AnimatePresence mode="wait"
+  // 的退出动画被反复打断形成死锁，整个动画实验室会永远卡在本组件上。
+  const isPresent = useIsPresent();
+  const presentRef = useRef(true); presentRef.current = isPresent;
   const seed = (): KPod[] => SEED_NAMES.map((name) => ({ id: ++kpodSeq, name, version: "v1" as const, status: "running" as const, bornAt: Date.now() - 99999 }));
   const [desired, setDesired] = useState(3);
   const [pods, setPods] = useState<KPod[]>(seed);
@@ -231,13 +235,14 @@ export function DemoReconcileLoop() {
   const addLogs = (lines: string[]) => setLog((p) => [...p.slice(-60), ...lines]);
   const addLog = (t: string) => addLogs([t]);
 
-  // 控制器永不停歇：循环步骤高亮 + 调和节拍
+  // 控制器永不停歇：循环步骤高亮 + 调和节拍（退出/后台标签时暂停）
   useEffect(() => {
-    const iv = setInterval(() => setStep((s) => (s + 1) % 3), 850);
+    const iv = setInterval(() => { if (!presentRef.current || document.hidden) return; setStep((s) => (s + 1) % 3); }, 850);
     return () => clearInterval(iv);
   }, []);
   useEffect(() => {
     const iv = setInterval(() => {
+      if (!presentRef.current || document.hidden) return;
       const now = Date.now();
       const logs: string[] = [];
       let next = podsRef.current.map((p) => {

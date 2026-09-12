@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion } from "framer-motion";
 import { DemoLayerCache, DemoPortMap, DemoContainerVsVM, DemoOverlayFS, DemoReconcileLoop, DemoNamespace, DemoCgroups } from "@/components/container/demos";
 import { LayersStack3DDemo, PortFlow3DDemo } from "@/components/container/Demo3D";
 
@@ -18,8 +18,8 @@ const TABS = [
 ];
 
 export default function DemosPage() {
-  const [tab, setTab] = useState(TABS[4].key);
-  const active = TABS.find((t) => t.key === tab)!;
+  const [tab, setTab] = useState("layers3d");
+  const active = TABS.find((t) => t.key === tab) ?? TABS[0];
 
   return (
     <div className="max-w-4xl mx-auto px-4 py-10">
@@ -47,17 +47,16 @@ export default function DemosPage() {
         ))}
       </div>
 
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={active.key}
-          initial={{ opacity: 0, y: 14 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.22 }}
-        >
-          {active.comp}
-        </motion.div>
-      </AnimatePresence>
+      {/* 仅入场动画（key 变化即重挂载）：mode="wait" 的退出等待会在生产构建下被
+          高频 setState 的动画（调和循环等）卡死，这里不等待退出，彻底规避死锁 */}
+      <motion.div
+        key={active.key}
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.2 }}
+      >
+        {active.comp}
+      </motion.div>
 
       <div className="text-xs text-slate-400 mt-6">
         💡 3D 场景支持拖拽旋转；「镜像分层」可以拉开层间距、点击每一层看它的故事；「端口包流」有洪峰模式和端口冲突剧本。
