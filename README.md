@@ -9,6 +9,12 @@
 
 > 技术栈：Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 · Framer Motion · Three.js
 
+## 📸 界面截图
+
+| 首页（迷你实操课） | 双栏联动沙盒 | 课程目录 |
+|-------------------|-------------|----------|
+| ![首页](assets/screenshots/01-home.png) | ![沙盒](assets/screenshots/02-sandbox.png) | ![课程](assets/screenshots/03-courses.png) |
+
 ## 📸 它长什么样
 
 **首页 = 一堂 30 秒迷你实操课**：点一下按钮，终端里逐字敲出 `docker build`，每一行输出都由页面内的模拟引擎真实计算——构建日志、带名字的镜像分层（每层可点开看文件清单）、run 出的容器卡片可增可删：
