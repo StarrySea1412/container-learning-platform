@@ -116,6 +116,8 @@ export interface Challenge {
   initialCommands: string[];
   /** 挑战中允许用户编辑的文件（引擎内路径） */
   editableFile?: string;
+  /** 本挑战的快捷命令按钮（不填则用通用默认） */
+  quickCommands?: string[];
   goals: { id: string; desc: string; check: CheckPredicate; hint: string }[];
   solution: string[];
   takeaway: string;

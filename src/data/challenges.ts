@@ -14,6 +14,7 @@ export const challenges: Challenge[] = [
       "左侧终端已进入 /root/app 并把胖镜像 app:fat 构建好了。下方编辑器打开的就是那份'祖传 Dockerfile'——你可以直接改写它，然后用 docker build -t app:slim . 构建瘦身版。",
     initialCommands: ["cd /root/app", "docker build -t app:fat .", "docker images"],
     editableFile: "/root/app/Dockerfile",
+    quickCommands: ["docker images", "cat Dockerfile", "docker build -t app:slim .", "docker run -d --name slim-app -e PORT=3000 -p 3000:3000 app:slim", "curl localhost:3000", "docker ps -a"],
     goals: [
       {
         id: "g1",
@@ -67,6 +68,7 @@ export const challenges: Challenge[] = [
     scene:
       "终端已经把当前版本构建成镜像 app:v1 并启动了容器 web——但它是退着的。先 docker ps -a 看状态，再想想第一步该干什么。",
     initialCommands: ["docker build -t app:v1 /root/broken", "docker run -d --name web app:v1", "docker ps -a"],
+    quickCommands: ["docker ps -a", "docker logs web", "docker run -d --name web-fix -e PORT=3000 -p 3000:3000 app:v1", "curl localhost:3000"],
     goals: [
       {
         id: "g1",
@@ -112,6 +114,7 @@ export const challenges: Challenge[] = [
       "docker run -d --name dashboard nginx:alpine",
       "docker run -d --name legacy-api -p 3001:80 nginx:alpine",
     ],
+    quickCommands: ["docker network ls", "docker exec dashboard curl http://api:80", "docker network create appnet", "docker network connect appnet api", "docker network connect appnet dashboard", "docker rm -f legacy-api"],
     goals: [
       {
         id: "g1",
@@ -161,6 +164,7 @@ export const challenges: Challenge[] = [
     scene:
       "终端里已经起了 notes（nginx:alpine），用户上传都写在它的可写层。你需要用命名卷把数据搬到容器外，再用新容器接上它，最后收掉旧容器。",
     initialCommands: ["docker run -d --name notes nginx:alpine"],
+    quickCommands: ["docker volume ls", "docker volume create uploaddata", "docker run -d --name notes-v2 -v uploaddata:/usr/share/nginx/html nginx:alpine", "docker rm -f notes", "docker volume rm uploaddata"],
     goals: [
       {
         id: "g1",
@@ -203,6 +207,7 @@ export const challenges: Challenge[] = [
       "终端已在 /root/stack，先 cat docker-compose.yml 看看这份声明写了什么，然后一条命令把整套服务拉起来。",
     initialCommands: ["cd /root/stack", "cat docker-compose.yml"],
     editableFile: "/root/stack/docker-compose.yml",
+    quickCommands: ["cat docker-compose.yml", "docker compose up -d", "curl localhost:8080", "docker compose ps", "docker compose down", "curl localhost:8081"],
     goals: [
       {
         id: "g1",

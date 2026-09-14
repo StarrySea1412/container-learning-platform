@@ -150,7 +150,7 @@ function ChallengeRun({ challenge: c, onBack }: { challenge: Challenge; onBack: 
         seedFactory={() => createSeedEngine()}
         editableFile={c.editableFile}
         onAfterCommand={check}
-        quickCommands={["docker ps -a", "docker logs web", "docker images", "curl localhost:3000", "docker build -t app:slim .", "cd /root/app"]}
+        quickCommands={c.quickCommands ?? ["docker ps -a", "docker images"]}
         height="h-[520px]"
       />
     </div>

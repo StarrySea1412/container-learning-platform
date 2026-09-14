@@ -241,7 +241,7 @@ export interface ParsedArgs {
   values: Map<string, string>;
   rest: string[];
 }
-const VALUE_FLAGS = new Set(["-p", "--publish", "--name", "-v", "--volume", "-e", "--env", "--network", "-m", "--memory", "--cpus", "-w", "--workdir", "--entrypoint", "-t", "--tag", "-f", "--file", "--tail", "--build-arg", "--platform"]);
+const VALUE_FLAGS = new Set(["-p", "--publish", "--name", "-v", "--volume", "-e", "--env", "--network", "-m", "--memory", "--cpus", "-w", "--workdir", "--entrypoint", "-t", "--tag", "-f", "--file", "--tail", "--build-arg", "--platform", "--project"]);
 const BOOL_FLAGS = new Set(["-d", "-it", "-i", "-a", "-q", "-f", "--rm", "--force", "--no-cache", "--help", "-s", "-la", "-lh", "-l", "-r", "-p"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
