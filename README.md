@@ -3,6 +3,8 @@
   <p align="center">开源的交互式容器中文学习网站 · Docker 正课 + K8s 进阶 + 原理篇 · 浏览器内自研 Docker 模拟引擎 · 双栏联动沙盒 · 事故场景挑战</p>
 </p>
 
+![技术栈全景图](assets/tech-stack.png)
+
 一个**完全在浏览器中运行**的容器学习平台：11 门课 46 节、9 组可交互动画、可敲 60+ 条命令的模拟沙盒、自动判分的场景挑战。不需要安装 Docker、不需要任何后端，打开网页就能练。
 
 > 学习五重奏的第五件：[python-learning](https://gitee.com/starry-sea-1412/python-learning) · [git-learning-platform](https://gitee.com/starry-sea-1412/git-learning-platform) · [linux-learning-platform](https://gitee.com/starry-sea-1412/linux-learning-platform) · [photography-learning](https://gitee.com/starry-sea-1412/photography-learning)
@@ -118,16 +120,6 @@ src/
 ```
 
 课程内容完全数据驱动——新增课程只需在 `src/data/courses.ts` 添加条目，新增动画在 `components/container/demos.tsx` 实现并在注册表挂一个 key。
-
-## 🗺️ 路线图
-
-| 阶段 | 内容 | 状态 |
-|---|---|---|
-| M1 | Docker 正课 6 门（20 节）+ 引擎 + 双栏沙盒 + 挑战 ×2 | ✅ |
-| M2 | K8s 进阶篇 3 门（10 节）+ 调和循环动画 | ✅ |
-| M3 | 原理篇 2 门（8 节）+ namespace/cgroups 动画 | ✅ |
-| M4 | 挑战扩充至 10 个、速查表、定位测试与三轨路径 | 📋 |
-| M5 | XP 成就系统、英文版 | 📋 |
 
 ## 🤝 致谢与参考
 
