@@ -24,7 +24,8 @@ export type CheckPredicate =
   | { type: "volumeExists"; name: string }
   | { type: "networkHasContainer"; network: string; container: string }
   | { type: "curlOk"; url: string }
-  | { type: "commandRan"; keyword: string };
+  | { type: "commandRan"; keyword: string }
+  | { type: "buildCacheHit"; instruction: string };
 
 export interface SandboxExercise {
   task: string;

@@ -41,7 +41,7 @@ export interface VImage {
   createdAt: number;
 }
 
-export type ContainerStatus = "created" | "running" | "paused" | "exited";
+export type ContainerStatus = "created" | "running" | "paused" | "exited" | "restarting";
 
 export interface VMount {
   /** named volume 名；bind mount 时为空 */
@@ -66,6 +66,9 @@ export interface VContainer {
   httpPort?: number;
   logs: TermLine[];
   limits?: { memoryMB?: number; cpus?: number };
+  restartPolicy?: string;
+  restartCount?: number;
+  logOpts?: string;
   createdAt: number;
   startedAt?: number;
   finishedAt?: number;
@@ -241,7 +244,7 @@ export interface ParsedArgs {
   values: Map<string, string>;
   rest: string[];
 }
-const VALUE_FLAGS = new Set(["-p", "--publish", "--name", "-v", "--volume", "-e", "--env", "--network", "-m", "--memory", "--cpus", "-w", "--workdir", "--entrypoint", "-t", "--tag", "-f", "--file", "--tail", "--build-arg", "--platform", "--project"]);
+const VALUE_FLAGS = new Set(["-p", "--publish", "--name", "-v", "--volume", "-e", "--env", "--network", "-m", "--memory", "--cpus", "-w", "--workdir", "--entrypoint", "-t", "--tag", "-f", "--file", "--tail", "--build-arg", "--platform", "--project", "--restart", "--log-opt", "--log-driver"]);
 const BOOL_FLAGS = new Set(["-d", "-it", "-i", "-a", "-q", "-f", "--rm", "--force", "--no-cache", "--help", "-s", "-la", "-lh", "-l", "-r", "-p"]);
 
 function parseArgs(argv: string[]): ParsedArgs {
@@ -250,6 +253,14 @@ function parseArgs(argv: string[]): ParsedArgs {
   const rest: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
+    // --key=value 连写形式（真实 docker 两种写法都接受）
+    if (a.startsWith("--")) {
+      const eq = a.indexOf("=");
+      if (eq > -1) {
+        const k = a.slice(0, eq);
+        if (VALUE_FLAGS.has(k)) { values.set(k, a.slice(eq + 1)); continue; }
+      }
+    }
     if (VALUE_FLAGS.has(a) && i + 1 < argv.length) { values.set(a, argv[++i]); continue; }
     if (BOOL_FLAGS.has(a)) { flags.add(a); continue; }
     // 合并短旗标如 -it / -aq
@@ -332,6 +343,8 @@ export class ContainerEngine {
   cwd = "/root";
   version = 0;
   commandHistory: string[] = [];
+  /** 最近一次 build 命中缓存的层（buildCacheHit 判分用） */
+  lastBuildCacheHits: string[] = [];
   private listeners = new Set<() => void>();
   private buildCache = new Map<string, VLayer>();
   private seq = 0;
@@ -480,6 +493,8 @@ export class ContainerEngine {
       status: "created", cmd: cmdOverride.length ? cmdOverride : image.cmd,
       env, ports, mounts, network, limits, createdAt: Date.now(), logs: [],
       project: values.get("--project") ?? undefined,
+      restartPolicy: values.get("--restart") ?? undefined,
+      logOpts: values.get("--log-opt") ?? undefined,
       httpPort: image.service?.port,
     };
     this.containers.push(container);
@@ -530,10 +545,44 @@ export class ContainerEngine {
     const serverKey = Object.keys(image.files).find((f) => f.endsWith("/server.js"));
     if (head === "node" && serverKey) {
       const src = image.files[serverKey];
-      if (src.includes("process.env.PORT") && !c.env.PORT) {
+      // PORT 严格必需（无兜底默认值）才触发秒退剧本；process.env.PORT || 3000 这类写法不会崩
+      if (src.includes("process.env.PORT") && !src.includes("process.env.PORT ||") && !c.env.PORT) {
         pushLog("Error: PORT environment variable is required", "r");
         pushLog("exiting…", "d");
         c.status = "exited"; c.exitCode = 1; c.finishedAt = Date.now();
+        if (attach) c.logs.forEach((l) => out.push({ ...l }));
+        return;
+      }
+      // 重启风暴剧本（教学：配置没进镜像 → 启动即崩；restart policy 只会无限重试，治不了配置错误）
+      const configPath = "/etc/app/config.json";
+      if (src.includes(configPath) && !image.files[configPath] && !c.mounts.some((m) => m.dest === configPath)) {
+        pushLog("node:internal/modules/cjs/loader:636", "r");
+        pushLog(`Error: Cannot find module '${configPath}'`, "r");
+        pushLog("Require stack:", "r");
+        pushLog("- /app/server.js", "r");
+        pushLog("exiting…", "d");
+        c.exitCode = 1; c.finishedAt = Date.now();
+        if (c.restartPolicy && c.restartPolicy !== "no") {
+          c.status = "restarting"; c.restartCount = (c.restartCount ?? 0) + 3;
+          pushLog(`[container] restart policy '${c.restartPolicy}'：进程退出 (code 1)，自动重启中…（已重启 ${c.restartCount} 次）`, "y");
+        } else {
+          c.status = "exited";
+        }
+        if (attach) c.logs.forEach((l) => out.push({ ...l }));
+        return;
+      }
+      // 日志刷屏剧本（教学：json-file 驱动默认无上限，磁盘被日志写爆）
+      if (src.includes("console.log(new Date()")) {
+        c.httpPort = 3000;
+        pushLog("server listening on port 3000", "g");
+        const rows = ["GET /api/orders 200 12ms", "GET /api/users 200 8ms", "POST /api/orders 201 31ms", "GET /health 200 2ms", "GET /api/orders 200 11ms"];
+        rows.forEach((r, i) => pushLog(`2026-09-16T03:${(41 + i).toString().padStart(2, "0")}:xx INFO ${r}`, "d"));
+        if (c.logOpts?.includes("max-")) {
+          pushLog(`[docker] 日志轮转已生效（--log-opt ${c.logOpts}）：单文件达到上限即滚动覆盖，磁盘不会再被打爆`, "g");
+        } else {
+          pushLog("[docker] 日志驱动 json-file（默认、无上限）：应用已累计写入 4,281,600 行 / 4.2GB 日志——这就是磁盘告警的元凶", "y");
+          pushLog("[docker] 该容器每多跑一天就多 ~4GB；--log-opt max-size 才能止血", "d");
+        }
         if (attach) c.logs.forEach((l) => out.push({ ...l }));
         return;
       }
@@ -543,6 +592,31 @@ export class ContainerEngine {
     }
     if (head === "nginx") pushLog("/docker-entrypoint.sh: Configuration complete; ready for start up", "d");
     if (head === "redis-server") pushLog("* Ready to accept connections tcp", "g");
+    // OOM 剧本（教学：exit 137 的经典由来）——stress 类进程申请内存超过 -m 限额时被内核 OOM Kill
+    if (head === "stress" && c.limits?.memoryMB) {
+      // --vm / --vm-bytes 兼容 "=值" 与 "名 值" 两种写法（真实 stress 都支持）
+      const flagVal = (name: string) => {
+        const i = cmd.indexOf(name);
+        if (i > -1) return cmd[i + 1] ?? "";
+        return cmd.find((a) => a.startsWith(name + "="))?.split("=")[1] ?? "";
+      };
+      const vmBytes = Number(flagVal("--vm-bytes").replace(/[kmg]b?$/i, "")) || 256;
+      const hasVm = cmd.includes("--vm") || cmd.some((a) => a.startsWith("--vm=") || a.startsWith("--vm-bytes"));
+      if (hasVm) {
+        pushLog(`stress: info: allocating ${vmBytes}MB of memory...`, "d");
+        if (vmBytes > c.limits.memoryMB) {
+          pushLog(`stress: FAIL: memory exhausted (allocated above ${c.limits.memoryMB}MB cgroup limit)`, "r");
+          pushLog("[container] 内核 OOM Killer 介入：进程被 SIGKILL", "r");
+          c.status = "exited"; c.exitCode = 137; c.finishedAt = Date.now();
+          if (attach) {
+            c.logs.forEach((l) => out.push({ ...l }));
+            out.push({ text: `${c.name}  (exit 137: OOMKilled——容器内存超过 -m 限额被内核杀掉，docker inspect 可见 OOMKilled:true)`, c: "y" });
+          }
+          return;
+        }
+        pushLog("stress: info: allocation succeeded, spinning...", "g");
+      }
+    }
     if (attach) c.logs.forEach((l) => out.push({ ...l }));
   }
 
@@ -555,11 +629,11 @@ export class ContainerEngine {
   /* ---- ps / images ---- */
   private dockerPs(argv: string[], out: TermLine[]) {
     const { flags } = parseArgs(argv);
-    const list = flags.has("-a") ? this.containers : this.containers.filter((c) => c.status === "running");
+    const list = flags.has("-a") ? this.containers : this.containers.filter((c) => c.status === "running" || c.status === "restarting");
     if (flags.has("-q")) { list.forEach((c) => out.push({ text: c.id })); return; }
     if (list.length === 0) { out.push({ text: "CONTAINER ID   IMAGE   COMMAND   STATUS   PORTS   NAMES", c: "d" }); out.push({ text: flags.has("-a") ? "(还没有任何容器，用 docker run 创建一个)" : "(没有运行中的容器；docker ps -a 可查看全部)", c: "d" }); return; }
     const row = (c: VContainer) => {
-      const status = c.status === "running" ? upFor(c.startedAt!) : c.status === "paused" ? `Up ${ago(c.startedAt!)} (Paused)` : `Exited (${c.exitCode ?? 0}) ${ago(c.finishedAt ?? c.createdAt)}`;
+      const status = c.status === "running" ? upFor(c.startedAt!) : c.status === "restarting" ? `Restarting (${c.exitCode ?? 1}) ${ago(c.startedAt ?? c.createdAt)}` : c.status === "paused" ? `Up ${ago(c.startedAt!)} (Paused)` : `Exited (${c.exitCode ?? 0}) ${ago(c.finishedAt ?? c.createdAt)}`;
       const ports = c.ports.map((p) => `0.0.0.0:${p.hostPort}->${p.containerPort}/tcp`).join(", ");
       return `${c.id.slice(0, 12)}   ${c.imageRef}   "${c.cmd.join(" ").slice(0, 20)}"   ${status}   ${ports || ""}   ${c.name}`;
     };
@@ -684,7 +758,7 @@ export class ContainerEngine {
       const c = this.findContainer(n);
       if (!c) { out.push({ text: `Error response from daemon: No such container: ${n}`, c: "r" }); continue; }
       if (action === "stop" || action === "kill") {
-        if (c.status !== "running" && c.status !== "paused") { out.push({ text: `Error response from daemon: Container ${c.id} is not running`, c: "r" }); continue; }
+        if (c.status !== "running" && c.status !== "paused" && c.status !== "restarting") { out.push({ text: `Error response from daemon: Container ${c.id} is not running`, c: "r" }); continue; }
         c.status = "exited"; c.finishedAt = Date.now(); c.exitCode = action === "kill" ? 137 : 0;
         c.logs.push(action === "kill" ? { text: "[container] 收到 SIGKILL，进程立即终止", c: "r" } : { text: "[container] 收到 SIGTERM，优雅退出", c: "d" });
         if (action === "kill") out.push({ text: `${c.name}  (exit 137: SIGKILL，这就是著名 137 错误码的由来)`, c: "y" });
@@ -765,6 +839,7 @@ export class ContainerEngine {
       out.push({ text: JSON.stringify({
         Id: c.id, Name: "/" + c.name, Image: c.imageRef,
         State: { Status: c.status, Running: c.status === "running", Paused: c.status === "paused", ExitCode: c.exitCode ?? 0, OOMKilled: c.exitCode === 137 },
+        RestartCount: c.restartCount ?? 0,
         Config: { Env: Object.entries(c.env).map(([k, v]) => `${k}=${v}`), Cmd: c.cmd, Image: c.imageId },
         NetworkSettings: { Networks: { [c.network]: { NetworkID: this.networks.find((n) => n.name === c.network)?.id ?? "" } }, Ports: Object.fromEntries(c.ports.map((p) => [`${p.containerPort}/tcp`, [{ HostIp: "0.0.0.0", HostPort: String(p.hostPort) }]])) },
         Mounts: c.mounts.map((m) => ({ Type: m.volName ? "volume" : "bind", Name: m.volName, Source: m.hostPath, Destination: m.dest })),
@@ -912,6 +987,7 @@ export class ContainerEngine {
     const { repo, tag: tagPart } = parseImageRef(tag);
 
     out.push({ text: `[+] Building (sandbox buildkit)`, c: "b" });
+    this.lastBuildCacheHits = [];
 
     const instructions = parseDockerfile(df);
     if (instructions.length === 0) { out.push({ text: "dockerfile parse error: empty dockerfile", c: "r" }); return; }
@@ -949,11 +1025,12 @@ export class ContainerEngine {
 
       const cacheable = ["RUN", "COPY", "ADD"].includes(ins.kw);
       let layerFilesDelta: Record<string, string> | null = null;
-      const filesHash = ins.kw === "COPY" || ins.kw === "ADD" ? hashStr(JSON.stringify(ins.args) + contextFingerprint(this.vfs, dir)) : "";
+      const filesHash = ins.kw === "COPY" || ins.kw === "ADD" ? hashStr(JSON.stringify(ins.args) + copySrcFingerprint(this.vfs, dir, ins.args)) : "";
       const cacheKey = `${parentKey}::${ins.kw} ${ins.args}${filesHash}`;
       const hit = cacheable && !flags.has("--no-cache") ? this.buildCache.get(cacheKey) : undefined;
       if (hit) {
         current.layers.push({ ...hit, cached: true });
+        this.lastBuildCacheHits.push(`${ins.kw} ${ins.args}`);
         out.push({ text: `${label} CACHED  ${ins.kw} ${ins.args.slice(0, 50)}`, c: "g" });
         parentKey = cacheKey;
         continue;
@@ -1339,6 +1416,21 @@ function contextFingerprint(vfs: VFS, dir: string): string {
   return hashStr(collectFiles(vfs, dir).map(([p, c]) => p + ":" + c.length).join("|"));
 }
 
+/** COPY 缓存指纹：真实 Docker 只看列出的源文件内容——COPY package.json . 不会因为源码变化而失效 */
+function copySrcFingerprint(vfs: VFS, dir: string, args: string): string {
+  const m = args.match(/^--from=(\S+)\s+/);
+  if (m) return "";
+  const srcs = args.split(/\s+/).slice(0, -1);
+  const rows: string[] = [];
+  for (const src of srcs) {
+    const abs = vfs.normalize(src === "." ? dir : src.startsWith("/") ? src : dir + "/" + src, dir);
+    if (vfs.isFile(abs)) rows.push(abs + ":" + (vfs.readFile(abs) ?? ""));
+    else if (vfs.isDir(abs)) collectFiles(vfs, abs).forEach(([p, c]) => rows.push(p + ":" + c.length));
+    else return contextFingerprint(vfs, dir);
+  }
+  return hashStr(rows.join("|"));
+}
+
 function collectFiles(vfs: VFS, dir: string): [string, string][] {
   const out: [string, string][] = [];
   const walk = (p: string) => {
@@ -1440,6 +1532,7 @@ export function evaluateCheck(e: ContainerEngine, p: import("@/types").CheckPred
       return e.runningContainers().some((c) => c.ports.some((x) => x.hostPort === Number(m[1])) && c.httpPort);
     }
     case "commandRan": return e.commandHistory.some((h) => h.includes(p.keyword));
+    case "buildCacheHit": return e.lastBuildCacheHits.some((h) => h.startsWith(p.instruction));
     default: return false;
   }
 }
@@ -1506,6 +1599,57 @@ volumes:
   site:
 `;
 
+// /root/flaky —— 重启风暴挑战：配置文件忘了 COPY 进镜像
+const FLAKY_DOCKERFILE = `FROM node:20-alpine
+WORKDIR /app
+COPY server.js .
+CMD ["node", "server.js"]
+`;
+
+const FLAKY_SERVER_JS = `const config = require("/etc/app/config.json");
+const http = require("http");
+http.createServer((req, res) => {
+  res.end("hello from " + config.appName);
+}).listen(3000, () => console.log("server listening on port 3000"));
+`;
+
+const FLAKY_CONFIG = `{
+  "appName": "flaky-web"
+}
+`;
+
+// /root/logspam —— 日志爆盘挑战：每个请求都打一行日志，json-file 无上限
+const SPAM_SERVER_JS = `const http = require("http");
+http.createServer((req, res) => {
+  console.log(new Date().toISOString() + " INFO GET /api/orders 200");
+  res.end("spammy api ok");
+}).listen(3000, () => console.log("server listening on port 3000"));
+`;
+
+// /root/ci —— CI 缓存挑战：层顺序反了，改一行代码全量重装依赖
+const CI_BAD_DOCKERFILE = `# ⚠ 这份 Dockerfile 的层顺序是反的：
+# COPY . . 在 RUN npm install 之前 → 改任何一行代码都会让依赖层缓存失效。
+FROM node:20-alpine
+WORKDIR /app
+COPY . .
+RUN npm install
+EXPOSE 3000
+CMD ["node", "server.js"]
+`;
+
+const CI_SERVER_JS = `const http = require("http");
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.end("ci-app v1");
+}).listen(port, () => console.log("server listening on port " + port));
+`;
+
+const CI_PACKAGE_JSON = `{
+  "name": "ci-app",
+  "dependencies": { "express": "^4.19.0" }
+}
+`;
+
 export function createSeedEngine(): ContainerEngine {
   const e = new ContainerEngine();
   e.networks.push({ name: "bridge", id: rid(12), subnet: "172.17.0.0/16", driver: "bridge", containers: [], createdAt: Date.now() });
@@ -1526,6 +1670,20 @@ export function createSeedEngine(): ContainerEngine {
   // /root/stack —— compose 素材
   e.vfs.mkdirp("/root/stack");
   e.vfs.writeFile("/root/stack/docker-compose.yml", COMPOSE_YML);
+  // /root/flaky —— 重启风暴挑战（config.json 在宿主机上，但没进镜像）
+  e.vfs.mkdirp("/root/flaky");
+  e.vfs.writeFile("/root/flaky/Dockerfile", FLAKY_DOCKERFILE);
+  e.vfs.writeFile("/root/flaky/server.js", FLAKY_SERVER_JS);
+  e.vfs.writeFile("/root/flaky/config.json", FLAKY_CONFIG);
+  // /root/logspam —— 日志爆盘挑战
+  e.vfs.mkdirp("/root/logspam");
+  e.vfs.writeFile("/root/logspam/Dockerfile", FLAKY_DOCKERFILE);
+  e.vfs.writeFile("/root/logspam/server.js", SPAM_SERVER_JS);
+  // /root/ci —— CI 缓存挑战
+  e.vfs.mkdirp("/root/ci");
+  e.vfs.writeFile("/root/ci/Dockerfile", CI_BAD_DOCKERFILE);
+  e.vfs.writeFile("/root/ci/server.js", CI_SERVER_JS);
+  e.vfs.writeFile("/root/ci/package.json", CI_PACKAGE_JSON);
   e.vfs.writeFile("/root/README.md", "欢迎来到容器沙盒。输入 help 查看支持的命令。\n");
   return e;
 }

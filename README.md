@@ -5,7 +5,7 @@
 
 ![技术栈全景图](assets/tech-stack.png)
 
-一个**完全在浏览器中运行**的容器学习平台：11 门课 46 节、9 组可交互动画、可敲 60+ 条命令的模拟沙盒、自动判分的场景挑战。不需要安装 Docker、不需要任何后端，打开网页就能练。
+一个**完全在浏览器中运行**的容器学习平台：11 门课 46 节、9 组可交互动画、可敲 60+ 条命令的模拟沙盒、10 道自动判分的场景挑战。不需要安装 Docker、不需要任何后端，打开网页就能练。
 
 > 学习五重奏的第五件：[python-learning](https://gitee.com/starry-sea-1412/python-learning) · [git-learning-platform](https://gitee.com/starry-sea-1412/git-learning-platform) · [linux-learning-platform](https://gitee.com/starry-sea-1412/linux-learning-platform) · [photography-learning](https://gitee.com/starry-sea-1412/photography-learning)
 
@@ -85,10 +85,14 @@
 
 ## 🚨 场景挑战
 
-带剧情的实战演练，初始故障现场 + 逐条验证目标 + 分层提示 + 参考解法：
+带剧情的实战演练（共 10 道）：初始故障现场 + 逐条验证目标 + 分层提示 + 参考解法，全部在浏览器沙盒里自动判分：
 
-- **镜像瘦身：从 1.2GB 到 200MB 以内**（内置 Dockerfile 编辑器 + 自动判分）
-- **凌晨 3 点：容器一启动就退出**（logs 排障第一现场）
+- **镜像瘦身** / **CI 慢如牛**——多阶段构建与构建缓存层序
+- **凌晨 3 点容器秒退** / **重启风暴**——docker logs 排障、restart policy 的边界
+- **微服务互相找不到** / **端口被占**——自定义网络 DNS、端口占用排查
+- **用户文件去哪了** / **磁盘被日志写爆**——数据卷与 --log-opt 日志轮转
+- **一条命令起一整套**——compose 编排与声明式改配置
+- **exit 137**——cgroup 内存限额与 OOM Killer
 
 ## 🚀 快速开始
 

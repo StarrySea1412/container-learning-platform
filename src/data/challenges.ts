@@ -240,4 +240,256 @@ export const challenges: Challenge[] = [
     takeaway:
       "compose 的本质：**把一组 docker run 的全部参数声明成一个 YAML 文件**。三个隐藏福利：①自动建自定义网络（服务名互访，DNS 免费送）；②depends_on 自动排序；③改声明 = down + up 重建，不用记任何临时命令。注意它和 K8s 的距离只差「自愈」——compose 挂了不会自动拉起，调和循环是下一站。",
   },
+  {
+    id: "restart-storm",
+    slug: "restart-storm",
+    title: "重启风暴：restart=always 救不了配置错误",
+    difficulty: "中等",
+    minutes: 20,
+    icon: "🔁",
+    story:
+      "你学乖了，这次上线特意加了 --restart=always，心想容器挂了自己会爬起来，稳了。结果容器在 Restarting (1) 里无限循环，一个请求都没接住。重启策略能解决「进程偶发崩溃」，但它治不了「每次启动都崩」——那是配置或镜像的问题。",
+    scene:
+      "终端已在 /root/flaky：应用 app:flaky 已构建并用 --restart=always 启动了容器 web，此刻它正在无限重启。config.json 明明就在宿主机目录里——为什么镜像里没有它？",
+    initialCommands: ["cd /root/flaky", "docker build -t app:flaky .", "docker run -d --name web --restart=always app:flaky", "docker ps"],
+    editableFile: "/root/flaky/Dockerfile",
+    quickCommands: ["docker ps", "docker logs web", "cat Dockerfile", "docker rm -f web", "docker build -t app:flaky .", "docker run -d --name web-ok -p 3000:3000 -v /root/flaky/config.json:/etc/app/config.json app:flaky", "curl localhost:3000"],
+    goals: [
+      {
+        id: "g1",
+        desc: "查看 web 的日志，找到它反复退出的根因（docker logs web）",
+        check: { type: "commandRan", keyword: "docker logs" },
+        hint: "docker logs web——最后一行 Cannot find module '/etc/app/config.json' 就是答案：server.js 要读配置，但 Dockerfile 里没有 COPY 它。",
+      },
+      {
+        id: "g2",
+        desc: "先止血：把还在无限重启的旧容器 web 删掉（docker rm -f web）",
+        check: { type: "containerGone", name: "web" },
+        hint: "正在无限重启的容器先干掉：docker rm -f web。排查清楚之前，让它在后台空转只会消耗资源。",
+      },
+      {
+        id: "g3",
+        desc: "修复后用新容器 web-ok 把服务跑起来：把 COPY config.json /etc/app/config.json 加进 Dockerfile 重新 build，或者不改镜像、run 时 -v /root/flaky/config.json:/etc/app/config.json 挂进去",
+        check: { type: "containerRunning", name: "web-ok" },
+        hint: "推荐配置外置：docker run -d --name web-ok -p 3000:3000 -v /root/flaky/config.json:/etc/app/config.json app:flaky。也可以走重建路线：编辑器里给 Dockerfile 加一行 COPY config.json /etc/app/config.json，docker build -t app:flaky . 后再 run。",
+      },
+      {
+        id: "g4",
+        desc: "curl localhost:3000 确认服务活了",
+        check: { type: "curlOk", url: "localhost:3000" },
+        hint: "curl localhost:3000 能拿到 200 响应才算修复完成。",
+      },
+    ],
+    solution: [
+      "docker ps                     # web 一直 Restarting (1)",
+      "docker logs web               # Error: Cannot find module '/etc/app/config.json'",
+      "docker rm -f web              # 止血",
+      "# 路线 A：docker run -d --name web-ok -p 3000:3000 -v /root/flaky/config.json:/etc/app/config.json app:flaky",
+      "# 路线 B：Dockerfile 加 COPY config.json /etc/app/config.json → docker build -t app:flaky . → docker run -d --name web-ok -p 3000:3000 app:flaky",
+      "curl localhost:3000",
+    ],
+    takeaway:
+      "restart policy 的适用场景是「偶发崩溃后自愈」，而 CrashLoopBackOff 式的死循环说明是**确定性错误**：配置缺失、依赖没装、端口被占——重试一万次也是同一个死法。Docker 侧用 exit code + docker logs 3 分钟定位；到了 K8s 侧就是 kubectl describe + events。另外记住这题的深层教训：**配置文件不进镜像**——要么挂载，要么环境变量，镜像只管代码。",
+  },
+  {
+    id: "log-flood",
+    slug: "log-flood",
+    title: "磁盘告警：日志把宿主机写爆了",
+    difficulty: "中等",
+    minutes: 20,
+    icon: "🧯",
+    story:
+      "运维半夜@你：那台宿主机磁盘 95%！你 df -h 一查，/var/lib/docker 之下全是容器的 json-file 日志——某个服务每个请求都打一行日志，从上线到现在攒了 4.2GB，而且没有任何轮转上限。日志要打，但得给它一个天花板。",
+    scene:
+      "终端已在 /root/logspam：日志大户 app:spammy 已构建，容器 spam-web 正在跑。先 docker logs spam-web 感受一下什么叫刷屏，再想想怎么给它装上轮转阀门。",
+    initialCommands: ["cd /root/logspam", "docker build -t app:spammy .", "docker run -d --name spam-web app:spammy"],
+    quickCommands: ["docker logs spam-web", "docker rm -f spam-web", "docker run -d --name web-quiet --log-opt max-size=10m --log-opt max-file=3 -p 3000:3000 app:spammy", "curl localhost:3000", "docker logs web-quiet"],
+    goals: [
+      {
+        id: "g1",
+        desc: "复现症状：docker logs spam-web，看到刷屏日志和 4.2GB 的告警说明",
+        check: { type: "commandRan", keyword: "docker logs" },
+        hint: "docker logs spam-web——除了业务日志，最后两行会告诉你：json-file 驱动默认无上限，这就是磁盘的慢性毒药。",
+      },
+      {
+        id: "g2",
+        desc: "止血：删掉日志大户旧容器 spam-web（docker rm -f spam-web）",
+        check: { type: "containerGone", name: "spam-web" },
+        hint: "docker rm -f spam-web。日志上限是容器级配置，老容器改不了，只能重建。",
+      },
+      {
+        id: "g3",
+        desc: "带轮转重建：docker run -d --name web-quiet --log-opt max-size=10m --log-opt max-file=3 -p 3000:3000 app:spammy",
+        check: { type: "containerRunning", name: "web-quiet" },
+        hint: "docker run -d --name web-quiet --log-opt max-size=10m --log-opt max-file=3 -p 3000:3000 app:spammy——单文件 10MB，最多留 3 份，磁盘占用封顶 30MB。",
+      },
+      {
+        id: "g4",
+        desc: "curl localhost:3000 确认服务活着，再 docker logs web-quiet 看轮转生效的提示",
+        check: { type: "curlOk", url: "localhost:3000" },
+        hint: "curl localhost:3000 触发检测；再看 docker logs web-quiet，最后会有「日志轮转已生效」的确认行。",
+      },
+    ],
+    solution: [
+      "docker logs spam-web          # json-file 无上限，已写 4.2GB",
+      "docker rm -f spam-web",
+      "docker run -d --name web-quiet --log-opt max-size=10m --log-opt max-file=3 -p 3000:3000 app:spammy",
+      "curl localhost:3000",
+      "docker logs web-quiet         # ✓ 日志轮转已生效",
+    ],
+    takeaway:
+      "Docker 默认日志驱动 json-file **没有大小上限**——单个长跑容器能把宿主机磁盘静默写爆，这是新手生产事故榜第一名。止血用 --log-opt max-size + max-file（单文件上限 + 滚动份数）；治本要回到应用侧：别在循环里打无价值的日志，访问日志交给专门日志系统（EFK/Loki）收走。K8s 里的对应物是 kubelet 的 containerLogMaxSize，默认 10MB 轮转。",
+  },
+  {
+    id: "port-conflict",
+    slug: "port-conflict",
+    title: "新容器起不来：port is already allocated",
+    difficulty: "简单",
+    minutes: 15,
+    icon: "🚧",
+    story:
+      "交接文档说新版本 web-v2 监听 8080。你按文档 docker run，结果 daemon 直接怼回来一句 port is already allocated。8080 被谁占了？十有八九是上一任没下线的旧容器，还在后台安详地监听着同一个端口。",
+    scene:
+      "终端里有一个旧容器 legacy 正占着 8080 端口（上一任交接时忘了下线）。你现在要按文档启动 web-v2——先亲眼看一次报错，再顺着报错把它修好。",
+    initialCommands: ["docker run -d --name legacy -p 8080:80 nginx:alpine"],
+    quickCommands: ["docker run -d --name web-v2 -p 8080:80 nginx:alpine", "docker ps", "docker rm -f legacy", "docker run -d --name web-v2 -p 8080:80 nginx:alpine", "curl localhost:8080"],
+    goals: [
+      {
+        id: "g1",
+        desc: "复现故障：docker run -d --name web-v2 -p 8080:80 nginx:alpine，看到 port is already allocated",
+        check: { type: "commandRan", keyword: "web-v2" },
+        hint: "直接照文档执行：docker run -d --name web-v2 -p 8080:80 nginx:alpine——daemon 会拒绝绑定：8080 已被占用。",
+      },
+      {
+        id: "g2",
+        desc: "docker ps 找到占用 8080 的旧容器 legacy",
+        check: { type: "commandRan", keyword: "docker ps" },
+        hint: "docker ps——PORTS 列里那行 0.0.0.0:8080->80 就是占用者 legacy。生产上还可以用 lsof -i:8080 或 ss -tlnp 从宿主机侧定位。",
+      },
+      {
+        id: "g3",
+        desc: "下线旧实例：docker rm -f legacy",
+        check: { type: "containerGone", name: "legacy" },
+        hint: "docker rm -f legacy（-f 是因为它还在运行）。端口随容器删除而释放。",
+      },
+      {
+        id: "g4",
+        desc: "重新启动 web-v2：docker run -d --name web-v2 -p 8080:80 nginx:alpine",
+        check: { type: "containerRunning", name: "web-v2" },
+        hint: "端口释放后原命令就能跑：docker run -d --name web-v2 -p 8080:80 nginx:alpine。注意 g1 那次失败不会留下 web-v2 容器，直接重跑即可。",
+      },
+      {
+        id: "g5",
+        desc: "curl localhost:8080 验证新版本上线",
+        check: { type: "curlOk", url: "localhost:8080" },
+        hint: "curl localhost:8080——能拿到 nginx 欢迎页说明端口交接完成。",
+      },
+    ],
+    solution: [
+      "docker run -d --name web-v2 -p 8080:80 nginx:alpine   # ✗ port is already allocated",
+      "docker ps                                             # 找到 legacy 占着 0.0.0.0:8080->80",
+      "docker rm -f legacy",
+      "docker run -d --name web-v2 -p 8080:80 nginx:alpine",
+      "curl localhost:8080",
+    ],
+    takeaway:
+      "port is already allocated 的排查链：**报错 → docker ps 看 PORTS 列 → rm -f 旧容器 → 重启**。两个防复发习惯：①给长命容器起名字、写 compose 文件，交接时不会留下无主容器；②端口分配有登记（compose 文件就是登记本），否则「换端口重跑」看似快，三个月后没人记得 8081~8099 里住着谁。",
+  },
+  {
+    id: "ci-cache",
+    slug: "ci-cache",
+    title: "CI 慢如牛：改一行代码，重装全部依赖",
+    difficulty: "中等",
+    minutes: 25,
+    icon: "⚡",
+    story:
+      "同事抱怨：CI 每次构建 8 分钟，改个文案也要重装全部 npm 依赖。你翻开 Dockerfile 看了两行就笑了——COPY . . 排在 RUN npm install 前面。构建缓存的规则就一条：**某一层变了，它后面的所有层全部作废**。依赖层想命中缓存，就必须站在「最常变的东西」前面。",
+    scene:
+      "终端已在 /root/ci。先 docker build -t app:v2 . 感受全量构建；再 echo '// rebuilt' >> server.js 模拟改一行代码后重新构建——你会看到 npm install 层跟着全量重跑。编辑器里就是那份层序反了的 Dockerfile。",
+    initialCommands: ["cd /root/ci", "cat Dockerfile", "docker build -t app:v2 ."],
+    editableFile: "/root/ci/Dockerfile",
+    quickCommands: ["cat Dockerfile", "docker build -t app:v2 .", "echo '// rebuilt' >> server.js", "docker run -d --name ci-app -p 3000:3000 app:v2", "curl localhost:3000"],
+    goals: [
+      {
+        id: "g1",
+        desc: "构建 app:v2（此时每层都全量执行），记住每层的耗时感受",
+        check: { type: "imageExists", ref: "app:v2" },
+        hint: "docker build -t app:v2 .——注意 RUN npm install 这层是实打实执行的（有「估算新增体积」那行）。",
+      },
+      {
+        id: "g2",
+        desc: "模拟改代码：echo '// rebuilt' >> server.js，然后重新构建——观察 RUN npm install 层跟着全量重跑",
+        check: { type: "commandRan", keyword: "// rebuilt" },
+        hint: "echo '// rebuilt' >> server.js 后再 docker build -t app:v2 .——COPY . . 这层的指纹因 server.js 变化而失效，npm install 排在它后面也被连坐。",
+      },
+      {
+        id: "g3",
+        desc: "重排层序并重建：把 COPY package.json . 和 RUN npm install 挪到 COPY . . 之前；之后再改代码重新构建，RUN npm install 应显示 CACHED",
+        check: { type: "buildCacheHit", instruction: "RUN npm install" },
+        hint: "四步：①编辑器里把 COPY package.json . 和 RUN npm install 提到 COPY . . 上面；②docker build -t app:v2 .（新顺序的第一次构建仍会全量，缓存链在这次重建）；③echo '// rebuilt' >> server.js；④再 docker build -t app:v2 . ——这次 COPY package.json CACHED → RUN npm install CACHED，只有 COPY . . 重跑。",
+      },
+      {
+        id: "g4",
+        desc: "docker run -d --name ci-app -p 3000:3000 app:v2 并 curl localhost:3000 验证",
+        check: { type: "curlOk", url: "localhost:3000" },
+        hint: "docker run -d --name ci-app -p 3000:3000 app:v2，然后 curl localhost:3000。",
+      },
+    ],
+    solution: [
+      "docker build -t app:v2 .                       # 全量构建",
+      "echo '// rebuilt' >> server.js",
+      "docker build -t app:v2 .                       # npm install 被连坐重跑",
+      "# 编辑 Dockerfile：把 COPY package.json . 和 RUN npm install 提到 COPY . . 之前",
+      "docker build -t app:v2 .                       # 新顺序首次构建（重建缓存链）",
+      "echo '// rebuilt' >> server.js",
+      "docker build -t app:v2 .                       # ✓ RUN npm install CACHED",
+      "docker run -d --name ci-app -p 3000:3000 app:v2",
+      "curl localhost:3000",
+    ],
+    takeaway:
+      "构建缓存像多米诺：**某层失效，其后所有层连环作废**。所以层序的黄金法则是「最常变的放最后」：依赖清单（package.json/requirements.txt）→ 装依赖 → 源码 → 构建。Docker 对 COPY 的缓存判定精确到源文件——COPY package.json . 只看 package.json，源码再怎么改它都岿然不动。这一招通常能把 CI 构建时间从分钟级压到秒级，是所有容器工程师的必修课。",
+  },
+  {
+    id: "oom-kill",
+    slug: "oom-kill",
+    title: "exit 137：容器被内核杀了",
+    difficulty: "中等",
+    minutes: 15,
+    icon: "💥",
+    story:
+      "压测报告：服务跑着跑着就没了，重启日志毫无头绪。你 docker ps -a 扫了一眼：Exited (137)。137 = 128 + 9，SIGKILL——但这次不是你 docker kill 的，是内核的 OOM Killer：容器内存用量顶穿了 cgroup 限额，内核挑 biggest victim 直接处决。",
+    scene:
+      "终端已备好 alpine 镜像。用 -m 给容器设一个内存限额，再让 stress 进程申请超限的内存——亲眼看一次 137 是怎么诞生的。",
+    initialCommands: ["docker pull alpine"],
+    quickCommands: ["docker run -d --name mem-hog -m 256m alpine stress --vm 1 --vm-bytes 512m", "docker ps -a", "docker inspect mem-hog", "docker logs mem-hog", "docker run -d --name mem-ok -m 512m alpine stress --vm 1 --vm-bytes 256m"],
+    goals: [
+      {
+        id: "g1",
+        desc: "复现 OOM：docker run -d --name mem-hog -m 256m alpine stress --vm 1 --vm-bytes 512m",
+        check: { type: "commandRan", keyword: "stress" },
+        hint: "docker run -d --name mem-hog -m 256m alpine stress --vm 1 --vm-bytes 512m——申请 512MB 但限额 256MB，必死无疑。",
+      },
+      {
+        id: "g2",
+        desc: "确认死因：docker inspect mem-hog，看 State 里的 OOMKilled: true 和 ExitCode: 137",
+        check: { type: "commandRan", keyword: "docker inspect" },
+        hint: "docker inspect mem-hog——State 字段里 OOMKilled: true。日常排障记口诀：137 = 128 + 9 = SIGKILL，先怀疑 OOM。",
+      },
+      {
+        id: "g3",
+        desc: "对症下药：调大限额或减小压力，让 mem-ok 稳定运行：docker run -d --name mem-ok -m 512m alpine stress --vm 1 --vm-bytes 256m",
+        check: { type: "containerRunning", name: "mem-ok" },
+        hint: "docker run -d --name mem-ok -m 512m alpine stress --vm 1 --vm-bytes 256m——申请 256MB < 限额 512MB，stress 正常空转，docker ps 里它稳稳 Up。",
+      },
+    ],
+    solution: [
+      "docker run -d --name mem-hog -m 256m alpine stress --vm 1 --vm-bytes 512m",
+      "docker ps -a                # mem-hog Exited (137)",
+      "docker inspect mem-hog      # OOMKilled: true",
+      "docker run -d --name mem-ok -m 512m alpine stress --vm 1 --vm-bytes 256m",
+      "docker ps                   # mem-ok 稳定运行",
+    ],
+    takeaway:
+      "exit 137 不是一种错误，是两种 SIGKILL：你亲手 docker kill，或内核 OOM Killer 代劳。区分方法：docker inspect 看 OOMKilled 字段。要点：**-m 限额是保护，不是惩罚**——没有限额的容器一旦内存泄漏，会拖死整台宿主机上的邻居（这在 K8s 里对应 requests/limits，超 limit 同样 OOMKilled）。给容器设限额 + 给应用做内存画像，是上线前的两道保险。",
+  },
 ];
