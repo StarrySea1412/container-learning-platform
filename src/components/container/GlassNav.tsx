@@ -10,6 +10,8 @@ const NAV = [
   { href: "/demos", label: "动画" },
   { href: "/sandbox", label: "沙盒" },
   { href: "/challenges", label: "挑战" },
+  { href: "/cheatsheet", label: "速查" },
+  { href: "/placement", label: "定位" },
   { href: "/resources", label: "资源" },
 ];
 
